@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -200,10 +199,13 @@
 <div class="header">
   <div class="header-top">
     <div class="logo">FY<span>BA</span></div>
-    <div style="display:flex;align-items:center;gap:8px">
+    <div style="display:flex;align-items:center;gap:6px">
       <div class="sync-btn" id="syncBtn" onclick="handleGoogleAuth()">
         <span id="syncIcon">☁</span>
         <span id="syncLabel">Connecter</span>
+      </div>
+      <div class="sync-btn" id="exportBtn" onclick="exportToSheets()" style="display:none">
+        📤 Exporter
       </div>
     </div>
   </div>
@@ -366,7 +368,11 @@
 </div>
 
 <script>
-const SHEET_ID = '1kRDaCUX-wcn_92CYV18TaTXkx6YXPZqWDxDtj2wkcAM';
+const SHEET_IDS = {
+  DIF4: '1xUXHQzg_8QXbbrQAMfSTvGKVERyZw4FK0RYP1XMMVVs',
+  DAR2: '10zpgkmLUUjF8lJRCNTVeEMJ2KJFyqEqZinNvbseTVEI',
+  OWV1: '19oc3s8iKTrQoUqrxkYcmYWJ58VR-z69SRhEG6fIOHuA'
+};
 const CLIENT_ID = '411890671968-88l70vhahfqivau8ho8vgqr769nshgg4.apps.googleusercontent.com';
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets';
 const DEPOTS = ['DIF4','DAR2','OWV1'];
@@ -486,8 +492,10 @@ function handleGoogleAuth() {
 function updateSyncUI(connected) {
   const btn = document.getElementById('syncBtn');
   document.getElementById('syncIcon').textContent = connected ? '✓' : '☁';
-  document.getElementById('syncLabel').textContent = connected ? 'Sync' : 'Connecter';
+  document.getElementById('syncLabel').textContent = connected ? 'Google' : 'Connecter';
   btn.className = 'sync-btn ' + (connected ? 'connected' : '');
+  const exportBtn = document.getElementById('exportBtn');
+  if (exportBtn) exportBtn.style.display = connected ? 'flex' : 'none';
   renderConnectBanner();
 }
 
@@ -649,9 +657,10 @@ function renderDashboard() {
 // ===== SHEETS =====
 function colToLetter(n) { let s=''; while(n>0){let r=(n-1)%26;s=String.fromCharCode(65+r)+s;n=Math.floor((n-1)/26);}return s; }
 
-async function sheetsReq(method, path, body) {
+async function sheetsReq(method, path, body, sheetId) {
   if (!accessToken) return null;
-  const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}${path}`, {
+  const sid = sheetId || SHEET_IDS.DIF4;
+  const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${sid}${path}`, {
     method,
     headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined
@@ -660,72 +669,219 @@ async function sheetsReq(method, path, body) {
   return r.json();
 }
 
-async function initSheet() {
-  const headers = [['Livreur \\ Jour', 'Dépôt', ...Array.from({length:31},(_,i)=>String(i+1).padStart(2,'0'))]];
-  await sheetsReq('PUT', '/values/Feuille1!A1:AH1?valueInputOption=RAW', { values: headers });
-  await pushEmployeeNames();
-  showToast('✓ Google Sheet initialisé !');
+function getMonthSheetName() {
+  const monthNames = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
+  return monthNames[viewDate.getMonth()] + ' ' + viewDate.getFullYear();
 }
 
-async function pushEmployeeNames() {
-  if (!accessToken || !employees.length) return;
-  const res = await sheetsReq('GET', '/values/Feuille1!A2:B200');
-  const existing = (res?.values || []).map(r => r[0] || '');
-  const updates = [];
-  let nextRow = existing.length + 2;
-  for (const emp of employees) {
-    const name = emp.firstName + ' ' + emp.lastName;
-    if (!existing.includes(name)) {
-      updates.push({ range: `Feuille1!A${nextRow}:B${nextRow}`, values: [[name, emp.depot || '']] });
-      existing.push(name); nextRow++;
-    }
+async function ensureMonthSheet(depot, sheetName) {
+  const sid = SHEET_IDS[depot];
+  const spreadsheet = await sheetsReq('GET', '?fields=sheets.properties.title', null, sid);
+  const existing = (spreadsheet?.sheets || []).map(s => s.properties.title);
+  if (!existing.includes(sheetName)) {
+    await sheetsReq('POST', ':batchUpdate', {
+      requests: [{ addSheet: { properties: { title: sheetName } } }]
+    }, sid);
   }
-  if (updates.length) await sheetsReq('POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: updates });
+}
+
+async function getSheetTabId(depot, sheetName) {
+  const sid = SHEET_IDS[depot];
+  const res = await sheetsReq('GET', '?fields=sheets.properties', null, sid);
+  const sheet = (res?.sheets || []).find(s => s.properties.title === sheetName);
+  return sheet ? sheet.properties.sheetId : null;
+}
+
+async function initSheet() {
+  showToast('✓ Connecté — les données se synchronisent automatiquement');
+}
+
+// Sync instantané du jour en cours
+async function syncDayToSheet() {
+  if (!accessToken) return;
+  try {
+    const d = viewDate.getDate();
+    const dateStr = viewDate.toLocaleDateString('fr-FR');
+    const fbKey = dateStr.replace(/\//g, '-');
+    const dayData = history[fbKey] || {};
+    const sheetName = getMonthSheetName();
+
+    for (const depot of DEPOTS) {
+      const sid = SHEET_IDS[depot];
+      const depotEmps = employees.filter(e => e.depot === depot);
+      if (!depotEmps.length) continue;
+
+      // Créer la feuille du mois si elle n'existe pas
+      await ensureMonthSheet(depot, sheetName);
+
+      // Écrire les en-têtes si première fois
+      const headers = ['Date', ...depotEmps.map(e => e.firstName + ' ' + e.lastName)];
+      const endCol = colToLetter(headers.length);
+      await sheetsReq('PUT',
+        '/values/' + encodeURIComponent(sheetName) + '!A1:' + endCol + '1?valueInputOption=RAW',
+        { values: [headers] }, sid);
+
+      // Ligne du jour (row = jour + 1 pour l'en-tête)
+      const rowNum = d + 1;
+      const rowValues = [dateStr, ...depotEmps.map(emp => {
+        const a = dayData[emp.id];
+        return (a && a.pay) ? String(a.pay) : '';
+      })];
+
+      await sheetsReq('PUT',
+        '/values/' + encodeURIComponent(sheetName) + '!A' + rowNum + ':' + endCol + rowNum + '?valueInputOption=RAW',
+        { values: [rowValues] }, sid);
+
+      // Plaques en commentaire
+      const tabId = await getSheetTabId(depot, sheetName);
+      if (tabId !== null) {
+        const noteReqs = [];
+        depotEmps.forEach((emp, i) => {
+          const a = dayData[emp.id];
+          const t = (a && a.truckId) ? trucks.find(t => t.id == a.truckId) : null;
+          noteReqs.push({ updateCells: {
+            range: { sheetId: tabId, startRowIndex: rowNum-1, endRowIndex: rowNum, startColumnIndex: i+1, endColumnIndex: i+2 },
+            rows: [{ values: [{ note: t ? t.plate : '' }] }],
+            fields: 'note'
+          }});
+        });
+        if (noteReqs.length) await sheetsReq('POST', ':batchUpdate', { requests: noteReqs }, sid);
+      }
+    }
+
+    const btn = document.getElementById('exportBtn');
+    if (btn) btn.textContent = '📤 Exporter';
+    showToast('✓ Sheets mis à jour');
+  } catch(e) {
+    console.error(e);
+    const btn = document.getElementById('exportBtn');
+    if (btn) btn.textContent = '📤 Exporter';
+    showToast('Erreur sync', true);
+  }
 }
 
 function scheduleSyncToSheet() {
   if (!accessToken) return;
   clearTimeout(syncTimeout);
-  const btn = document.getElementById('syncBtn');
-  btn.className = 'sync-btn syncing';
-  document.getElementById('syncIcon').textContent = '⟳';
-  document.getElementById('syncLabel').textContent = '...';
-  syncTimeout = setTimeout(syncToSheet, 1200);
+  const btn = document.getElementById('exportBtn');
+  if (btn) { btn.textContent = '⏳...'; }
+  syncTimeout = setTimeout(syncDayToSheet, 1200);
 }
 
-async function syncToSheet() {
-  if (!accessToken) return;
+// ===== EXPORT COMPLET VERS SHEETS =====
+async function exportToSheets() {
+  if (!accessToken) { showToast('Connectez Google Sheets d\'abord', true); return; }
+  const btn = document.getElementById('exportBtn');
+  btn.textContent = '⏳ Export...';
   try {
-    await pushEmployeeNames();
-    const key = dateKey(viewDate);
-    const fbKey = key.replace(/\//g, '-');
-    const dayNum = viewDate.getDate();
-    const col = colToLetter(dayNum + 2);
-    const res = await sheetsReq('GET', '/values/Feuille1!A1:A200');
-    const rows = (res?.values || []).map(r => r[0] || '');
-    const assignments = history[fbKey] || {};
-    const updates = [];
-    for (const emp of employees) {
-      const name = emp.firstName + ' ' + emp.lastName;
-      const rowIdx = rows.indexOf(name);
-      if (rowIdx < 1) continue;
-      const a = assignments[emp.id];
-      let cell = '';
-      if (a && (a.truckId || a.pay)) {
-        const t = trucks.find(t => t.id == a.truckId);
-        cell = t ? t.plate : '';
-        if (a.pay) cell += (cell ? ' | ' : '') + a.pay + '€';
-        if (a.comment) cell += ' | ' + a.comment;
+    // Récupérer le mois en cours (ou le mois de viewDate)
+    const year = viewDate.getFullYear();
+    const month = viewDate.getMonth();
+    const monthNames = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
+    const monthLabel = monthNames[month] + ' ' + year;
+    const sheetName = monthNames[month] + ' ' + year;
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+    for (const depot of DEPOTS) {
+      const sid = SHEET_IDS[depot];
+      const depotEmps = employees.filter(e => e.depot === depot);
+      if (!depotEmps.length) continue;
+
+      // Créer la feuille du mois si elle n'existe pas
+      await ensureMonthSheet(depot, sheetName);
+
+      // Construire le tableau : ligne 1 = en-têtes (Date + noms DA)
+      // Colonnes : A=Date, B=DA1, C=DA2...
+      const headers = ['Date', ...depotEmps.map(e => e.firstName + ' ' + e.lastName)];
+      const rows = [headers];
+
+      let totalRow = ['TOTAL', ...depotEmps.map(() => 0)];
+
+      for (let d = 1; d <= daysInMonth; d++) {
+        const cellDate = new Date(year, month, d);
+        const dateStr = cellDate.toLocaleDateString('fr-FR');
+        const fbKey = dateStr.replace(/\//g, '-');
+        const dayData = history[fbKey] || {};
+        const row = [dateStr];
+        depotEmps.forEach((emp, i) => {
+          const a = dayData[emp.id];
+          if (a && (a.pay || a.truckId)) {
+            const t = a.truckId ? trucks.find(t => t.id == a.truckId) : null;
+            let cell = a.pay ? String(a.pay) : '';
+            row.push(cell);
+            totalRow[i+1] += parseFloat(a.pay) || 0;
+          } else {
+            row.push('');
+          }
+        });
+        rows.push(row);
       }
-      updates.push({ range: `Feuille1!${col}${rowIdx+1}`, values: [[cell]] });
+
+      // Format totaux
+      totalRow = totalRow.map((v, i) => i === 0 ? 'TOTAL' : (v > 0 ? v + '€' : ''));
+      rows.push(totalRow);
+
+      // Effacer et réécrire la feuille
+      const endCol = colToLetter(headers.length);
+      const endRow = rows.length;
+      await sheetsReq('PUT',
+        `/values/${encodeURIComponent(sheetName)}!A1:${endCol}${endRow}?valueInputOption=RAW`,
+        { values: rows }, sid
+      );
+
+      // Ajouter les plaques en commentaire de chaque cellule
+      const noteRequests2 = [];
+      for (let d2 = 1; d2 <= daysInMonth; d2++) {
+        const cellDate2 = new Date(year, month, d2);
+        const dateStr2 = cellDate2.toLocaleDateString('fr-FR');
+        const fbKey2 = dateStr2.replace(/\//g, '-');
+        const dayData2 = history[fbKey2] || {};
+        depotEmps.forEach((emp, i) => {
+          const a2 = dayData2[emp.id];
+          if (a2 && a2.truckId) {
+            const t2 = trucks.find(t => t.id == a2.truckId);
+            if (t2) {
+              noteRequests2.push({ updateCells: {
+                range: { sheetId, startRowIndex: d2, endRowIndex: d2+1, startColumnIndex: i+1, endColumnIndex: i+2 },
+                rows: [{ values: [{ note: t2.plate }] }],
+                fields: 'note'
+              }});
+            }
+          }
+        });
+      }
+      if (noteRequests2.length) await sheetsReq('POST', ':batchUpdate', { requests: noteRequests2 }, sid);
+
+      // Mettre en gras la ligne d'en-tête et la ligne TOTAL
+      const sheetId = await getSheetTabId(depot, sheetName);
+      if (sheetId !== null) {
+        await sheetsReq('POST', ':batchUpdate', { requests: [
+          { repeatCell: {
+            range: { sheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: headers.length },
+            cell: { userEnteredFormat: { textFormat: { bold: true }, backgroundColor: { red: 0.91, green: 0.94, blue: 0.99 } } },
+            fields: 'userEnteredFormat(textFormat,backgroundColor)'
+          }},
+          { repeatCell: {
+            range: { sheetId, startRowIndex: endRow-1, endRowIndex: endRow, startColumnIndex: 0, endColumnIndex: headers.length },
+            cell: { userEnteredFormat: { textFormat: { bold: true }, backgroundColor: { red: 0.88, green: 0.96, blue: 0.91 } } },
+            fields: 'userEnteredFormat(textFormat,backgroundColor)'
+          }}
+        ]}, sid);
+      }
     }
-    if (updates.length) await sheetsReq('POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: updates });
-    updateSyncUI(true);
-    showToast('✓ Sheets mis à jour');
+
+    btn.textContent = '📤 Exporter';
+    showToast('✓ Export réussi — ' + monthLabel);
   } catch(e) {
-    showToast('Erreur synchronisation', true);
-    updateSyncUI(true);
+    console.error(e);
+    btn.textContent = '📤 Exporter';
+    showToast('Erreur export', true);
   }
+}
+
+// getSheetId kept for compatibility
+async function getSheetId(sheetName) {
+  return null;
 }
 
 // ===== SAVE (kept for compatibility) =====
