@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -6,6 +7,8 @@
 <title>GestiLiv</title>
 <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
 <style>
   :root {
     --bg: #f0f4f8;
@@ -353,20 +356,68 @@ const CLIENT_ID = '411890671968-88l70vhahfqivau8ho8vgqr769nshgg4.apps.googleuser
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets';
 const DEPOTS = ['DIF4','DAR2','OWV1'];
 const DEPOT_COLORS = { DIF4:'dif4', DAR2:'dar2', OWV1:'owv1' };
+const FB_URL = 'https://fyba-f5b3c-default-rtdb.europe-west1.firebasedatabase.app';
+
+// Firebase init
+const fbApp = firebase.initializeApp({ databaseURL: FB_URL });
+const db = firebase.database();
 
 let accessToken = null;
 let tokenClient = null;
 let syncTimeout = null;
 let currentDriverId = null;
 
-let employees = JSON.parse(localStorage.getItem('employees') || '[]');
-let trucks = JSON.parse(localStorage.getItem('trucks') || '[]');
-// history: { "DD/MM/YYYY": { empId: { pay, truckId, comment } } }
-let history = JSON.parse(localStorage.getItem('glHistory') || '{}');
+let employees = [];
+let trucks = [];
+let history = {};
 
 // Current viewed date
 let viewDate = new Date();
 viewDate.setHours(0,0,0,0);
+
+// ===== FIREBASE REALTIME =====
+function fbRef(path) { return db.ref(path); }
+
+function initFirebase() {
+  // Listen to employees
+  fbRef('employees').on('value', snap => {
+    employees = snap.val() ? Object.values(snap.val()) : [];
+    renderAll();
+    updateDateNav();
+  });
+  // Listen to trucks
+  fbRef('trucks').on('value', snap => {
+    trucks = snap.val() ? Object.values(snap.val()) : [];
+    renderAll();
+  });
+  // Listen to history
+  fbRef('history').on('value', snap => {
+    history = snap.val() || {};
+    renderDriverCards();
+    updateDateStats();
+    renderRecapIfActive();
+  });
+}
+
+async function fbSaveEmployees() {
+  const obj = {};
+  employees.forEach(e => { obj[e.id] = e; });
+  await fbRef('employees').set(obj);
+}
+
+async function fbSaveTrucks() {
+  const obj = {};
+  trucks.forEach(t => { obj[t.id] = t; });
+  await fbRef('trucks').set(obj);
+}
+
+async function fbSaveAssignment(dateKey, empId, data) {
+  if (data === null) {
+    await fbRef('history/' + dateKey.replace(/\//g, '-') + '/' + empId).remove();
+  } else {
+    await fbRef('history/' + dateKey.replace(/\//g, '-') + '/' + empId).set(data);
+  }
+}
 
 function dateKey(d) {
   return d.toLocaleDateString('fr-FR');
@@ -379,16 +430,17 @@ function isToday() {
   return dateKey(viewDate) === todayKey();
 }
 function getAssignments(key) {
-  if (!history[key]) history[key] = {};
-  return history[key];
+  const fbKey = key.replace(/\//g, '-');
+  if (!history[fbKey]) history[fbKey] = {};
+  return history[fbKey];
 }
 
 // ===== GOOGLE AUTH =====
 window.addEventListener('load', () => {
+  initFirebase();
   if (typeof google !== 'undefined' && google.accounts) initGoogleAuth();
   else document.querySelector('script[src*="gsi"]').addEventListener('load', initGoogleAuth);
   updateDateNav();
-  renderAll();
 });
 
 function initGoogleAuth() {
@@ -533,11 +585,12 @@ async function syncToSheet() {
   try {
     await pushEmployeeNames();
     const key = dateKey(viewDate);
+    const fbKey = key.replace(/\//g, '-');
     const dayNum = viewDate.getDate();
     const col = colToLetter(dayNum + 2);
     const res = await sheetsReq('GET', '/values/Feuille1!A1:A200');
     const rows = (res?.values || []).map(r => r[0] || '');
-    const assignments = getAssignments(key);
+    const assignments = history[fbKey] || {};
     const updates = [];
     for (const emp of employees) {
       const name = emp.firstName + ' ' + emp.lastName;
@@ -562,11 +615,9 @@ async function syncToSheet() {
   }
 }
 
-// ===== SAVE =====
+// ===== SAVE (kept for compatibility) =====
 function save() {
-  localStorage.setItem('employees', JSON.stringify(employees));
-  localStorage.setItem('trucks', JSON.stringify(trucks));
-  localStorage.setItem('glHistory', JSON.stringify(history));
+  // Data is now saved to Firebase directly
 }
 
 // ===== TABS =====
@@ -673,11 +724,13 @@ function openDriverModal(empId) {
 
 function selectTruck(truckId) {
   const key = dateKey(viewDate);
-  if (!history[key]) history[key] = {};
-  if (!history[key][currentDriverId]) history[key][currentDriverId] = {};
-  history[key][currentDriverId].truckId = history[key][currentDriverId].truckId == truckId ? null : truckId;
+  const fbKey = key.replace(/\//g, '-');
+  if (!history[fbKey]) history[fbKey] = {};
+  if (!history[fbKey][currentDriverId]) history[fbKey][currentDriverId] = {};
+  history[fbKey][currentDriverId].truckId = history[fbKey][currentDriverId].truckId == truckId ? null : truckId;
+  fbSaveAssignment(key, currentDriverId, history[fbKey][currentDriverId]);
   document.querySelectorAll('.truck-chip').forEach((chip, i) => {
-    chip.classList.toggle('selected', trucks[i]?.id == history[key][currentDriverId].truckId);
+    chip.classList.toggle('selected', trucks[i]?.id == history[fbKey][currentDriverId].truckId);
   });
   save(); scheduleSyncToSheet();
 }
@@ -685,11 +738,13 @@ function selectTruck(truckId) {
 function autoSaveAssignment() {
   if (!currentDriverId) return;
   const key = dateKey(viewDate);
-  if (!history[key]) history[key] = {};
-  if (!history[key][currentDriverId]) history[key][currentDriverId] = {};
-  history[key][currentDriverId].pay = document.getElementById('modalPay').value;
-  history[key][currentDriverId].comment = document.getElementById('modalComment').value;
-  save(); scheduleSyncToSheet();
+  const fbKey = key.replace(/\//g, '-');
+  if (!history[fbKey]) history[fbKey] = {};
+  if (!history[fbKey][currentDriverId]) history[fbKey][currentDriverId] = {};
+  history[fbKey][currentDriverId].pay = document.getElementById('modalPay').value;
+  history[fbKey][currentDriverId].comment = document.getElementById('modalComment').value;
+  fbSaveAssignment(key, currentDriverId, history[fbKey][currentDriverId]);
+  scheduleSyncToSheet();
 }
 
 function clearAssignment() {
@@ -708,21 +763,25 @@ function addEmployee() {
   if (!fn || !ln) { showToast('Prénom et nom requis', true); return; }
   if (!depot) { showToast('Dépôt requis', true); return; }
   employees.push({ id: Date.now(), firstName: fn, lastName: ln.toUpperCase(), depot, phone: ph });
-  save();
   document.getElementById('newFirstName').value = '';
   document.getElementById('newLastName').value = '';
   document.getElementById('newDepot').value = '';
   document.getElementById('newPhone').value = '';
-  renderEmployeeList(); renderDriverCards();
-  if (accessToken) pushEmployeeNames().then(() => showToast('✓ DA ajouté dans Sheets'));
-  else showToast('✓ DA ajouté');
+  fbSaveEmployees().then(() => {
+    if (accessToken) pushEmployeeNames().then(() => showToast('✓ DA ajouté'));
+    else showToast('✓ DA ajouté');
+  });
 }
 
 function deleteEmployee(id) {
   if (!confirm('Supprimer ce DA ?')) return;
   employees = employees.filter(e => e.id !== id);
-  Object.values(history).forEach(day => delete day[id]);
-  save(); renderEmployeeList(); renderDriverCards(); scheduleSyncToSheet();
+  fbSaveEmployees();
+  fbRef('history').once('value', snap => {
+    const h = snap.val() || {};
+    Object.keys(h).forEach(day => { if (h[day][id]) fbRef('history/' + day + '/' + id).remove(); });
+  });
+  scheduleSyncToSheet();
 }
 
 function renderEmployeeList() {
@@ -752,14 +811,14 @@ function addTruck() {
   if (!plate) { showToast('Plaque requise', true); return; }
   if (trucks.find(t => t.plate === plate)) { showToast('Plaque déjà existante', true); return; }
   trucks.push({ id: Date.now(), plate, name });
-  save(); renderTruckList(); showToast('✓ Camion ajouté');
+  fbSaveTrucks().then(() => showToast('✓ Camion ajouté'));
 }
 
 function deleteTruck(id) {
   if (!confirm('Supprimer ce camion ?')) return;
   trucks = trucks.filter(t => t.id !== id);
-  Object.values(history).forEach(day => Object.values(day).forEach(a => { if (a.truckId == id) a.truckId = null; }));
-  save(); renderTruckList(); scheduleSyncToSheet();
+  fbSaveTrucks();
+  scheduleSyncToSheet();
 }
 
 function renderTruckList() {
