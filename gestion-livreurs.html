@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>GestiLiv – Gestion Livreurs</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --card: #21253a;
+    --accent: #f4a825;
+    --accent2: #e05c2a;
+    --text: #f0efea;
+    --muted: #8a8fa8;
+    --border: #2e334f;
+    --success: #3ecf8e;
+    --danger: #e05c5c;
+    --radius: 16px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; max-width: 480px; margin: 0 auto; padding-bottom: 90px; }
+
+  .header { background: linear-gradient(135deg, #1a1d27 0%, #21253a 100%); padding: 20px 20px 16px; border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 100; }
+  .header-top { display: flex; justify-content: space-between; align-items: center; }
+  .logo { font-family: 'Syne', sans-serif; font-weight: 800; font-size: 22px; }
+  .logo span { color: var(--accent); }
+  .header-right { display: flex; align-items: center; gap: 8px; }
+  .badge-count { background: var(--accent); color: #000; font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 20px; font-family: 'Syne', sans-serif; }
+  .sync-btn { background: var(--surface); border: 1px solid var(--border); border-radius: 20px; padding: 5px 12px; font-size: 11px; font-family: 'Syne', sans-serif; font-weight: 700; color: var(--muted); cursor: pointer; display: flex; align-items: center; gap: 5px; transition: all 0.2s; }
+  .sync-btn.connected { color: var(--success); border-color: var(--success)66; background: var(--success)11; }
+  .sync-btn.syncing { color: var(--accent); border-color: var(--accent)66; animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+  .tabs { display: flex; background: var(--surface); border-bottom: 1px solid var(--border); position: sticky; top: 69px; z-index: 99; }
+  .tab { flex: 1; padding: 14px 8px; text-align: center; font-family: 'Syne', sans-serif; font-weight: 600; font-size: 13px; color: var(--muted); cursor: pointer; border-bottom: 3px solid transparent; transition: all 0.2s; }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  .section { display: none; padding: 16px; }
+  .section.active { display: block; }
+
+  .truck-card { background: var(--card); border-radius: var(--radius); border: 1px solid var(--border); margin-bottom: 14px; overflow: hidden; transition: border-color 0.2s; cursor: pointer; }
+  .truck-header { display: flex; align-items: center; gap: 12px; padding: 14px 16px; background: linear-gradient(90deg, #21253a, #1e2235); border-bottom: 1px solid var(--border); }
+  .plate-badge { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #000; font-family: 'Syne', sans-serif; font-weight: 800; font-size: 14px; padding: 6px 12px; border-radius: 8px; letter-spacing: 1px; flex-shrink: 0; }
+  .truck-meta { flex: 1; }
+  .truck-name { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+  .truck-body { padding: 14px 16px; }
+
+  .field-row { margin-bottom: 12px; }
+  .field-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 5px; font-weight: 500; }
+  select, input[type="text"], input[type="number"], textarea { width: 100%; background: var(--surface); border: 1.5px solid var(--border); border-radius: 10px; color: var(--text); font-family: 'DM Sans', sans-serif; font-size: 14px; padding: 10px 14px; outline: none; transition: border-color 0.2s; appearance: none; -webkit-appearance: none; }
+  select:focus, input:focus, textarea:focus { border-color: var(--accent); }
+  textarea { resize: none; min-height: 72px; }
+  .pay-input-wrap { position: relative; }
+  .pay-input-wrap input { padding-right: 32px; }
+  .pay-euro { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); color: var(--accent); font-weight: 700; font-size: 15px; }
+
+  .btn { padding: 12px 20px; border-radius: 12px; font-family: 'Syne', sans-serif; font-weight: 700; font-size: 14px; cursor: pointer; border: none; transition: all 0.18s; display: inline-flex; align-items: center; gap: 7px; }
+  .btn-primary { background: var(--accent); color: #000; }
+  .btn-primary:active { background: var(--accent2); transform: scale(0.97); }
+  .btn-danger { background: var(--danger)22; color: var(--danger); border: 1px solid var(--danger)44; }
+  .btn-ghost { background: var(--border); color: var(--muted); }
+  .btn-google { background: #fff; color: #333; border: 1px solid #ddd; font-size: 13px; }
+  .btn-full { width: 100%; justify-content: center; }
+
+  .form-section { background: var(--surface); border-radius: var(--radius); padding: 16px; border: 1px solid var(--border); margin-bottom: 16px; }
+  .form-row { display: flex; gap: 10px; }
+  .form-row .field-row { flex: 1; }
+  .section-title { font-family: 'Syne', sans-serif; font-weight: 800; font-size: 17px; margin-bottom: 14px; }
+  .section-title span { color: var(--accent); }
+
+  .emp-item { display: flex; align-items: center; padding: 12px 14px; background: var(--surface); border-radius: 12px; border: 1px solid var(--border); margin-bottom: 9px; }
+  .emp-avatar { width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), var(--accent2)); display: flex; align-items: center; justify-content: center; font-family: 'Syne', sans-serif; font-weight: 800; font-size: 13px; color: #000; flex-shrink: 0; margin-right: 12px; }
+  .emp-info { flex: 1; }
+  .emp-name { font-weight: 600; font-size: 14px; }
+  .emp-sub { font-size: 12px; color: var(--muted); }
+
+  .summary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+  .summary-card { background: var(--surface); border-radius: 12px; padding: 14px; border: 1px solid var(--border); text-align: center; }
+  .summary-num { font-family: 'Syne', sans-serif; font-weight: 800; font-size: 26px; color: var(--accent); }
+  .summary-lbl { font-size: 11px; color: var(--muted); margin-top: 3px; }
+
+  .empty-state { text-align: center; padding: 40px 20px; color: var(--muted); }
+  .empty-state .empty-icon { font-size: 48px; margin-bottom: 12px; }
+
+  .tag-assigned { background: var(--success)22; color: var(--success); border: 1px solid var(--success)44; border-radius: 20px; padding: 3px 10px; font-size: 11px; font-weight: 700; }
+  .tag-free { background: var(--border); color: var(--muted); border-radius: 20px; padding: 3px 10px; font-size: 11px; font-weight: 700; }
+  .divider { height: 1px; background: var(--border); margin: 14px 0; }
+
+  .search-bar { display: flex; align-items: center; background: var(--surface); border: 1.5px solid var(--border); border-radius: 12px; padding: 9px 14px; margin-bottom: 14px; gap: 8px; }
+  .search-bar input { border: none; background: transparent; flex: 1; padding: 0; font-size: 14px; }
+
+  .connect-banner { background: #1a2a1a; border: 1px solid var(--success)33; border-radius: var(--radius); padding: 16px; margin-bottom: 16px; text-align: center; }
+  .connect-banner p { font-size: 13px; color: var(--muted); margin-bottom: 12px; line-height: 1.5; }
+
+  .modal-overlay { display: none; position: fixed; inset: 0; background: #000000bb; z-index: 300; align-items: flex-end; justify-content: center; }
+  .modal-overlay.open { display: flex; }
+  .modal { background: var(--card); border-radius: 24px 24px 0 0; padding: 24px 20px 36px; width: 100%; max-width: 480px; border: 1px solid var(--border); max-height: 85vh; overflow-y: auto; }
+  .modal-handle { width: 40px; height: 4px; background: var(--border); border-radius: 4px; margin: 0 auto 18px; }
+  .modal-title { font-family: 'Syne', sans-serif; font-weight: 800; font-size: 18px; margin-bottom: 18px; }
+
+  .toast { position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%); background: var(--success); color: #000; font-family: 'Syne', sans-serif; font-weight: 700; font-size: 13px; padding: 10px 20px; border-radius: 20px; z-index: 999; opacity: 0; transition: opacity 0.3s; pointer-events: none; white-space: nowrap; }
+  .toast.show { opacity: 1; }
+  .toast.error { background: var(--danger); color: #fff; }
+</style>
+</head>
+<body>
+
+<div class="toast" id="toast"></div>
+
+<div class="header">
+  <div class="header-top">
+    <div class="logo">Gesti<span>Liv</span></div>
+    <div class="header-right">
+      <div class="sync-btn" id="syncBtn" onclick="handleGoogleAuth()">
+        <span id="syncIcon">☁️</span>
+        <span id="syncLabel">Connecter</span>
+      </div>
+      <div class="badge-count" id="assignedCount">0 assignés</div>
+    </div>
+  </div>
+</div>
+
+<div class="tabs">
+  <div class="tab active" onclick="showTab('camions', this)">🚚 Camions</div>
+  <div class="tab" onclick="showTab('salaries', this)">👥 Salariés</div>
+  <div class="tab" onclick="showTab('recap', this)">📊 Récap</div>
+</div>
+
+<!-- CAMIONS -->
+<div class="section active" id="tab-camions">
+  <div id="connectBanner"></div>
+  <div class="search-bar">
+    <span>🔍</span>
+    <input type="text" id="searchTruck" placeholder="Rechercher une plaque..." oninput="renderTrucks()">
+  </div>
+  <div id="truckList"></div>
+  <button class="btn btn-primary btn-full" onclick="openAddTruck()">＋ Ajouter un camion</button>
+</div>
+
+<!-- SALARIÉS -->
+<div class="section" id="tab-salaries">
+  <div class="section-title"><span>Salariés</span></div>
+  <div class="form-section">
+    <div class="form-row">
+      <div class="field-row">
+        <div class="field-label">Prénom</div>
+        <input type="text" id="newFirstName" placeholder="Jean">
+      </div>
+      <div class="field-row">
+        <div class="field-label">Nom</div>
+        <input type="text" id="newLastName" placeholder="DUPONT">
+      </div>
+    </div>
+    <div class="field-row">
+      <div class="field-label">Téléphone (optionnel)</div>
+      <input type="text" id="newPhone" placeholder="06 00 00 00 00">
+    </div>
+    <button class="btn btn-primary btn-full" style="margin-top:4px" onclick="addEmployee()">＋ Ajouter le salarié</button>
+  </div>
+  <div id="employeeList"></div>
+</div>
+
+<!-- RÉCAP -->
+<div class="section" id="tab-recap">
+  <div class="section-title"><span>Résumé</span> du jour</div>
+  <div class="summary-grid" id="summaryGrid"></div>
+  <div id="recapList"></div>
+</div>
+
+<!-- MODAL AJOUTER CAMION -->
+<div class="modal-overlay" id="modalAddTruck">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-title">🚚 Nouveau camion</div>
+    <div class="field-row">
+      <div class="field-label">Plaque d'immatriculation *</div>
+      <input type="text" id="newPlate" placeholder="AB-123-CD" style="text-transform:uppercase">
+    </div>
+    <div class="field-row">
+      <div class="field-label">Nom / Description (optionnel)</div>
+      <input type="text" id="newTruckName" placeholder="Ex: Grand Fourgon, Frigo...">
+    </div>
+    <div style="display:flex;gap:10px;margin-top:8px">
+      <button class="btn btn-ghost" style="flex:1" onclick="closeModal('modalAddTruck')">Annuler</button>
+      <button class="btn btn-primary" style="flex:1" onclick="addTruck()">Ajouter</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL DÉTAIL CAMION -->
+<div class="modal-overlay" id="modalTruck">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-title" id="modalTruckTitle"></div>
+    <div class="field-row">
+      <div class="field-label">Livreur assigné</div>
+      <select id="modalDriver" onchange="updateTruckField()">
+        <option value="">— Non assigné —</option>
+      </select>
+    </div>
+    <div class="field-row">
+      <div class="field-label">Salaire du jour (€)</div>
+      <div class="pay-input-wrap">
+        <input type="number" id="modalPay" placeholder="0" min="0" step="0.5" oninput="updateTruckField()">
+        <span class="pay-euro">€</span>
+      </div>
+    </div>
+    <div class="field-row">
+      <div class="field-label">Commentaire</div>
+      <textarea id="modalComment" placeholder="Notes, incidents, instructions..." oninput="updateTruckField()"></textarea>
+    </div>
+    <div class="divider"></div>
+    <div style="display:flex;gap:10px">
+      <button class="btn btn-danger" style="flex:1" onclick="deleteTruck()">🗑 Supprimer</button>
+      <button class="btn btn-primary" style="flex:1" onclick="closeModal('modalTruck')">✓ Fermer</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const SHEET_ID = '1kRDaCUX-wcn_92CYV18TaTXkx6YXPZqWDxDtj2wkcAM';
+const CLIENT_ID = '411890671968-88l70vhahfqivau8ho8vgqr769nshgg4.apps.googleusercontent.com';
+const SCOPES = 'https://www.googleapis.com/auth/spreadsheets';
+
+let accessToken = null;
+let tokenClient = null;
+let syncTimeout = null;
+
+let employees = JSON.parse(localStorage.getItem('employees') || '[]');
+let trucks = JSON.parse(localStorage.getItem('trucks') || '[]');
+let currentTruckId = null;
+
+// ===== GOOGLE AUTH =====
+window.addEventListener('load', () => {
+  if (typeof google !== 'undefined' && google.accounts) {
+    initGoogleAuth();
+  } else {
+    document.querySelector('script[src*="gsi"]').addEventListener('load', initGoogleAuth);
+  }
+  renderTrucks();
+  renderEmployees();
+  updateBadge();
+  renderConnectBanner();
+});
+
+function initGoogleAuth() {
+  tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: CLIENT_ID,
+    scope: SCOPES,
+    callback: (resp) => {
+      if (resp.error) { showToast('Erreur connexion Google', true); return; }
+      accessToken = resp.access_token;
+      localStorage.setItem('gToken', accessToken);
+      updateSyncUI(true);
+      showToast('✓ Connecté à Google Sheets !');
+      initSheet();
+    }
+  });
+  const saved = localStorage.getItem('gToken');
+  if (saved) { accessToken = saved; updateSyncUI(true); }
+}
+
+function handleGoogleAuth() {
+  if (!tokenClient) { showToast('Chargement en cours...', true); return; }
+  if (accessToken) {
+    syncToSheet();
+  } else {
+    tokenClient.requestAccessToken({ prompt: 'consent' });
+  }
+}
+
+function updateSyncUI(connected) {
+  const btn = document.getElementById('syncBtn');
+  document.getElementById('syncIcon').textContent = connected ? '✓' : '☁️';
+  document.getElementById('syncLabel').textContent = connected ? 'Sync' : 'Connecter';
+  btn.className = 'sync-btn ' + (connected ? 'connected' : '');
+  renderConnectBanner();
+}
+
+function renderConnectBanner() {
+  const b = document.getElementById('connectBanner');
+  if (!b) return;
+  if (!accessToken) {
+    b.innerHTML = `<div class="connect-banner"><p><strong>Synchronisation Google Sheets désactivée</strong><br>Connectez votre compte Google pour envoyer les données automatiquement.</p><button class="btn btn-google btn-full" onclick="handleGoogleAuth()">🔗 Connecter Google Sheets</button></div>`;
+  } else {
+    b.innerHTML = '';
+  }
+}
+
+// ===== SHEET HELPERS =====
+function getTodayDayCol() {
+  return new Date().getDate(); // 1-31
+}
+
+function colToLetter(n) {
+  let s = '';
+  while (n > 0) { let r = (n-1)%26; s = String.fromCharCode(65+r)+s; n=Math.floor((n-1)/26); }
+  return s;
+}
+
+async function sheetsReq(method, path, body) {
+  if (!accessToken) return null;
+  const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}${path}`, {
+    method,
+    headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  if (r.status === 401) {
+    accessToken = null;
+    localStorage.removeItem('gToken');
+    updateSyncUI(false);
+    showToast('Session expirée, reconnectez-vous', true);
+    return null;
+  }
+  return r.json();
+}
+
+async function initSheet() {
+  // Write header row: A1 = "Livreur \ Jour", B1 = "01", C1 = "02" ... AF1 = "31"
+  const headers = [['Livreur \\ Jour', ...Array.from({length:31}, (_,i) => String(i+1).padStart(2,'0'))]];
+  await sheetsReq('PUT', '/values/Feuille1!A1:AF1?valueInputOption=RAW', { values: headers });
+  await pushEmployeeNames();
+  showToast('✓ Google Sheet initialisé !');
+}
+
+async function pushEmployeeNames() {
+  if (!accessToken || !employees.length) return;
+  // Get existing names in col A
+  const res = await sheetsReq('GET', '/values/Feuille1!A2:A200');
+  const existing = (res?.values || []).map(r => r[0] || '');
+  const updates = [];
+  let nextRow = existing.length + 2;
+  for (const emp of employees) {
+    const name = emp.firstName + ' ' + emp.lastName;
+    if (!existing.includes(name)) {
+      updates.push({ range: `Feuille1!A${nextRow}`, values: [[name]] });
+      existing.push(name);
+      nextRow++;
+    }
+  }
+  if (updates.length) {
+    await sheetsReq('POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: updates });
+  }
+}
+
+function scheduleSyncToSheet() {
+  if (!accessToken) return;
+  clearTimeout(syncTimeout);
+  const btn = document.getElementById('syncBtn');
+  btn.className = 'sync-btn syncing';
+  document.getElementById('syncIcon').textContent = '⟳';
+  document.getElementById('syncLabel').textContent = '...';
+  syncTimeout = setTimeout(syncToSheet, 1200);
+}
+
+async function syncToSheet() {
+  if (!accessToken) return;
+  try {
+    // Ensure employee names exist
+    await pushEmployeeNames();
+
+    const dayCol = getTodayDayCol(); // 1-31
+    const col = colToLetter(dayCol + 1); // +1 offset (col A = names)
+
+    // Get all names
+    const res = await sheetsReq('GET', '/values/Feuille1!A1:A200');
+    const rows = (res?.values || []).map(r => r[0] || '');
+
+    const updates = [];
+    for (const emp of employees) {
+      const name = emp.firstName + ' ' + emp.lastName;
+      const rowIdx = rows.indexOf(name);
+      if (rowIdx < 1) continue; // skip header row (index 0)
+      const rowNum = rowIdx + 1;
+
+      const myTrucks = trucks.filter(t => t.driverId == emp.id);
+      let cell = '';
+      if (myTrucks.length) {
+        cell = myTrucks.map(t => {
+          let s = t.plate;
+          if (t.pay) s += ' | ' + t.pay + '€';
+          if (t.comment) s += ' | ' + t.comment;
+          return s;
+        }).join('\n');
+      }
+      updates.push({ range: `Feuille1!${col}${rowNum}`, values: [[cell]] });
+    }
+
+    if (updates.length) {
+      await sheetsReq('POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: updates });
+    }
+    updateSyncUI(true);
+    showToast('✓ Sheets mis à jour');
+  } catch(e) {
+    showToast('Erreur synchronisation', true);
+    updateSyncUI(true);
+  }
+}
+
+// ===== SAVE =====
+function save() {
+  localStorage.setItem('employees', JSON.stringify(employees));
+  localStorage.setItem('trucks', JSON.stringify(trucks));
+}
+
+// ===== TABS =====
+function showTab(name, el) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  el.classList.add('active');
+  if (name === 'recap') renderRecap();
+  if (name === 'salaries') renderEmployees();
+  if (name === 'camions') renderTrucks();
+}
+
+// ===== EMPLOYEES =====
+function addEmployee() {
+  const fn = document.getElementById('newFirstName').value.trim();
+  const ln = document.getElementById('newLastName').value.trim();
+  const ph = document.getElementById('newPhone').value.trim();
+  if (!fn || !ln) { showToast('Prénom et nom requis', true); return; }
+  employees.push({ id: Date.now(), firstName: fn, lastName: ln.toUpperCase(), phone: ph });
+  save();
+  document.getElementById('newFirstName').value = '';
+  document.getElementById('newLastName').value = '';
+  document.getElementById('newPhone').value = '';
+  renderEmployees();
+  if (accessToken) pushEmployeeNames().then(() => showToast('✓ Salarié ajouté dans Sheets'));
+  else showToast('✓ Salarié ajouté');
+}
+
+function deleteEmployee(id) {
+  if (!confirm('Supprimer ce salarié ?')) return;
+  employees = employees.filter(e => e.id !== id);
+  trucks.forEach(t => { if (t.driverId == id) { t.driverId = null; t.pay = ''; t.comment = ''; } });
+  save();
+  renderEmployees();
+  renderTrucks();
+  scheduleSyncToSheet();
+}
+
+function renderEmployees() {
+  const list = document.getElementById('employeeList');
+  if (!employees.length) {
+    list.innerHTML = `<div class="empty-state"><div class="empty-icon">👤</div><p>Aucun salarié ajouté</p></div>`;
+    return;
+  }
+  list.innerHTML = employees.map(e => {
+    const assignedTruck = trucks.find(t => t.driverId == e.id);
+    return `<div class="emp-item">
+      <div class="emp-avatar">${e.firstName[0]}${e.lastName[0]}</div>
+      <div class="emp-info">
+        <div class="emp-name">${e.firstName} ${e.lastName}</div>
+        <div class="emp-sub">${assignedTruck ? '🚚 ' + assignedTruck.plate : (e.phone || 'Pas de tél.')}</div>
+      </div>
+      <button class="btn btn-danger" style="padding:8px 12px;font-size:12px" onclick="deleteEmployee(${e.id})">✕</button>
+    </div>`;
+  }).join('');
+}
+
+// ===== TRUCKS =====
+function addTruck() {
+  const plate = document.getElementById('newPlate').value.trim().toUpperCase();
+  const name = document.getElementById('newTruckName').value.trim();
+  if (!plate) { showToast('Plaque requise', true); return; }
+  if (trucks.find(t => t.plate === plate)) { showToast('Plaque déjà existante', true); return; }
+  trucks.push({ id: Date.now(), plate, name, driverId: null, pay: '', comment: '' });
+  save();
+  document.getElementById('newPlate').value = '';
+  document.getElementById('newTruckName').value = '';
+  closeModal('modalAddTruck');
+  renderTrucks();
+  showToast('✓ Camion ajouté');
+}
+
+function deleteTruck() {
+  if (!confirm('Supprimer ce camion ?')) return;
+  trucks = trucks.filter(t => t.id !== currentTruckId);
+  save();
+  closeModal('modalTruck');
+  renderTrucks();
+  scheduleSyncToSheet();
+}
+
+function openTruck(id) {
+  currentTruckId = id;
+  const t = trucks.find(t => t.id == id);
+  document.getElementById('modalTruckTitle').textContent = '🚚 ' + t.plate + (t.name ? ' — ' + t.name : '');
+  const sel = document.getElementById('modalDriver');
+  sel.innerHTML = '<option value="">— Non assigné —</option>';
+  employees.forEach(e => {
+    const opt = document.createElement('option');
+    opt.value = e.id;
+    opt.textContent = e.firstName + ' ' + e.lastName;
+    if (t.driverId == e.id) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  document.getElementById('modalPay').value = t.pay || '';
+  document.getElementById('modalComment').value = t.comment || '';
+  openModal('modalTruck');
+}
+
+function updateTruckField() {
+  const t = trucks.find(t => t.id === currentTruckId);
+  if (!t) return;
+  t.driverId = document.getElementById('modalDriver').value || null;
+  t.pay = document.getElementById('modalPay').value;
+  t.comment = document.getElementById('modalComment').value;
+  save();
+  renderTrucks();
+  updateBadge();
+  scheduleSyncToSheet();
+}
+
+function renderTrucks() {
+  const search = (document.getElementById('searchTruck')?.value || '').toLowerCase();
+  const list = document.getElementById('truckList');
+  const filtered = trucks.filter(t => t.plate.toLowerCase().includes(search) || (t.name||'').toLowerCase().includes(search));
+  if (!filtered.length) {
+    list.innerHTML = `<div class="empty-state"><div class="empty-icon">🚚</div><p>${trucks.length ? 'Aucun résultat' : 'Aucun camion ajouté'}</p></div>`;
+    updateBadge(); return;
+  }
+  list.innerHTML = filtered.map(t => {
+    const emp = t.driverId ? employees.find(e => e.id == t.driverId) : null;
+    return `<div class="truck-card" onclick="openTruck(${t.id})">
+      <div class="truck-header">
+        <div class="plate-badge">${t.plate}</div>
+        <div class="truck-meta">
+          <div class="truck-name">${t.name || 'Camion'}</div>
+          ${emp ? `<span class="tag-assigned">✓ Assigné</span>` : `<span class="tag-free">Libre</span>`}
+        </div>
+      </div>
+      <div class="truck-body">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div><div class="field-label">Livreur</div><div style="font-size:14px;font-weight:600">${emp ? emp.firstName+' '+emp.lastName : '—'}</div></div>
+          <div style="text-align:right"><div class="field-label">Salaire</div><div style="font-size:18px;font-weight:800;color:var(--accent)">${t.pay ? t.pay+'€' : '—'}</div></div>
+        </div>
+        ${t.comment ? `<div style="margin-top:10px;font-size:12px;color:var(--muted);background:var(--surface);border-radius:8px;padding:8px 10px">💬 ${t.comment}</div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+  updateBadge();
+}
+
+function updateBadge() {
+  const n = trucks.filter(t => t.driverId).length;
+  document.getElementById('assignedCount').textContent = n + ' assigné' + (n > 1 ? 's' : '');
+}
+
+// ===== RÉCAP =====
+function renderRecap() {
+  const assigned = trucks.filter(t => t.driverId).length;
+  const free = trucks.length - assigned;
+  const total = trucks.reduce((s,t) => s + (parseFloat(t.pay)||0), 0);
+  document.getElementById('summaryGrid').innerHTML = `
+    <div class="summary-card"><div class="summary-num">${trucks.length}</div><div class="summary-lbl">Camions</div></div>
+    <div class="summary-card"><div class="summary-num" style="color:var(--success)">${assigned}</div><div class="summary-lbl">Assignés</div></div>
+    <div class="summary-card"><div class="summary-num" style="color:var(--muted)">${free}</div><div class="summary-lbl">Libres</div></div>
+    <div class="summary-card"><div class="summary-num">${total.toFixed(0)}€</div><div class="summary-lbl">Total salaires</div></div>`;
+  const at = trucks.filter(t => t.driverId);
+  document.getElementById('recapList').innerHTML = at.length ? at.map(t => {
+    const emp = employees.find(e => e.id == t.driverId);
+    return `<div class="truck-card" style="cursor:default">
+      <div class="truck-header"><div class="plate-badge">${t.plate}</div><div class="truck-meta"><div class="truck-name">${t.name||'Camion'}</div><span class="tag-assigned">✓ Assigné</span></div></div>
+      <div class="truck-body">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div><div class="field-label">Livreur</div><div style="font-size:14px;font-weight:600">${emp ? emp.firstName+' '+emp.lastName : '—'}</div></div>
+          <div style="text-align:right"><div class="field-label">Salaire</div><div style="font-size:18px;font-weight:800;color:var(--accent)">${t.pay ? t.pay+'€' : '—'}</div></div>
+        </div>
+        ${t.comment ? `<div style="margin-top:10px;font-size:12px;color:var(--muted);background:var(--surface);border-radius:8px;padding:8px 10px">💬 ${t.comment}</div>` : ''}
+      </div>
+    </div>`;
+  }).join('') : `<div class="empty-state"><div class="empty-icon">📋</div><p>Aucune assignation pour le moment</p></div>`;
+}
+
+// ===== MODALS =====
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+function openAddTruck() { openModal('modalAddTruck'); }
+document.querySelectorAll('.modal-overlay').forEach(m => {
+  m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open'); });
+});
+
+// ===== TOAST =====
+function showToast(msg, error=false) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (error ? ' error' : '');
+  setTimeout(() => t.className = 'toast', 3000);
+}
+</script>
+</body>
+</html>
