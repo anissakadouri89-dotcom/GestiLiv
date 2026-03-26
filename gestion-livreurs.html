@@ -453,9 +453,14 @@ function isToday() {
   return dateKey(viewDate) === todayKey();
 }
 function getAssignments(key) {
+  // key can be DD/MM/YYYY or DD-MM-YYYY, always normalize to DD-MM-YYYY
   const fbKey = key.replace(/\//g, '-');
   if (!history[fbKey]) history[fbKey] = {};
   return history[fbKey];
+}
+
+function dateKeyToFbKey(d) {
+  return toFbKey(d);
 }
 
 // ===== GOOGLE AUTH =====
@@ -537,7 +542,8 @@ function updateDateNav() {
   todayBtn.style.display = isTod ? 'none' : 'inline-block';
 
   // Check if history has data for this day
-  const assignments = getAssignments(key);
+  const fbKey = toFbKey(viewDate);
+  const assignments = history[fbKey] || {};
   const hasData = Object.keys(assignments).length > 0;
   document.getElementById('navDaySub').innerHTML = document.getElementById('navDaySub').textContent + (hasData && !isTod ? ' <span class="history-badge">Données</span>' : '');
 
@@ -564,17 +570,25 @@ function countDepotRoutesForKey(fbKey, depot) {
   return employees.filter(e => e.depot === depot && day[e.id] && (day[e.id].truckId || day[e.id].pay)).length;
 }
 
+function toFbKey(d) {
+  // Always return DD-MM-YYYY format (Firebase key format)
+  const day = String(d.getDate()).padStart(2,'0');
+  const month = String(d.getMonth()+1).padStart(2,'0');
+  const year = d.getFullYear();
+  return day + '-' + month + '-' + year;
+}
+
 function getWeekKeys() {
   const keys = [];
   const d = new Date(viewDate);
-  const day = (d.getDay() + 6) % 7; // Monday=0
+  const day = (d.getDay() + 6) % 7;
   d.setDate(d.getDate() - day);
   for (let i = 0; i < 7; i++) {
     const dd = new Date(d);
     dd.setDate(d.getDate() + i);
     dd.setHours(0,0,0,0);
     const today = new Date(); today.setHours(0,0,0,0);
-    if (dd <= today) keys.push(dd.toLocaleDateString('fr-FR').replace(/\//g, '-'));
+    if (dd <= today) keys.push(toFbKey(dd));
   }
   return keys;
 }
@@ -588,15 +602,13 @@ function getMonthKeys() {
   for (let d = 1; d <= lastDay; d++) {
     const dd = new Date(year, month, d);
     dd.setHours(0,0,0,0);
-    if (dd <= today) {
-      keys.push(dd.toLocaleDateString('fr-FR').replace(/\//g, '-'));
-    }
+    if (dd <= today) keys.push(toFbKey(dd));
   }
   return keys;
 }
 
 function renderDashboard() {
-  const key = dateKey(viewDate).replace(/\//g, '-');
+  const key = toFbKey(viewDate);
   const dayAssignments = history[key] || {};
   const DEPOT_STYLES = {
     DIF4: { color:'#3a6fd8', bg:'#e8effd', border:'#b8cef7', cls:'dif4' },
@@ -702,7 +714,7 @@ async function syncDayToSheet() {
   try {
     const d = viewDate.getDate();
     const dateStr = viewDate.toLocaleDateString('fr-FR');
-    const fbKey = dateStr.replace(/\//g, '-');
+    const fbKey = toFbKey(viewDate);
     const dayData = history[fbKey] || {};
     const sheetName = getMonthSheetName();
 
@@ -711,41 +723,40 @@ async function syncDayToSheet() {
       const depotEmps = employees.filter(e => e.depot === depot);
       if (!depotEmps.length) continue;
 
-      // Créer la feuille du mois si elle n'existe pas
       await ensureMonthSheet(depot, sheetName);
 
-      // Écrire les en-têtes si première fois
+      // En-têtes
       const headers = ['Date', ...depotEmps.map(e => e.firstName + ' ' + e.lastName)];
       const endCol = colToLetter(headers.length);
       await sheetsReq('PUT',
         '/values/' + encodeURIComponent(sheetName) + '!A1:' + endCol + '1?valueInputOption=RAW',
         { values: [headers] }, sid);
 
-      // Ligne du jour (row = jour + 1 pour l'en-tête)
+      // Ligne du jour — inclut les cellules vides pour effacer les anciennes valeurs
       const rowNum = d + 1;
       const rowValues = [dateStr, ...depotEmps.map(emp => {
         const a = dayData[emp.id];
         return (a && a.pay) ? String(a.pay) : '';
       })];
 
+      // Utiliser RAW + clearValues pour bien écraser les anciennes valeurs
       await sheetsReq('PUT',
-        '/values/' + encodeURIComponent(sheetName) + '!A' + rowNum + ':' + endCol + rowNum + '?valueInputOption=RAW',
-        { values: [rowValues] }, sid);
+        '/values/' + encodeURIComponent(sheetName) + '!A' + rowNum + ':' + endCol + rowNum + '?valueInputOption=RAW&includeValuesInResponse=false',
+        { values: [rowValues], majorDimension: 'ROWS' }, sid);
 
-      // Plaques en commentaire
+      // Plaques en commentaire + effacement si vide
       const tabId = await getSheetTabId(depot, sheetName);
       if (tabId !== null) {
-        const noteReqs = [];
-        depotEmps.forEach((emp, i) => {
+        const noteReqs = depotEmps.map((emp, i) => {
           const a = dayData[emp.id];
-          const t = (a && a.truckId) ? trucks.find(t => t.id == a.truckId) : null;
-          noteReqs.push({ updateCells: {
+          const t = (a && a.truckId) ? trucks.find(tr => tr.id == a.truckId) : null;
+          return { updateCells: {
             range: { sheetId: tabId, startRowIndex: rowNum-1, endRowIndex: rowNum, startColumnIndex: i+1, endColumnIndex: i+2 },
             rows: [{ values: [{ note: t ? t.plate : '' }] }],
             fields: 'note'
-          }});
+          }};
         });
-        if (noteReqs.length) await sheetsReq('POST', ':batchUpdate', { requests: noteReqs }, sid);
+        await sheetsReq('POST', ':batchUpdate', { requests: noteReqs }, sid);
       }
     }
 
@@ -753,10 +764,10 @@ async function syncDayToSheet() {
     if (btn) btn.textContent = '📤 Exporter';
     showToast('✓ Sheets mis à jour');
   } catch(e) {
-    console.error(e);
+    console.error('syncDay error:', e);
     const btn = document.getElementById('exportBtn');
     if (btn) btn.textContent = '📤 Exporter';
-    showToast('Erreur sync', true);
+    showToast('Erreur sync sheets', true);
   }
 }
 
@@ -893,8 +904,8 @@ function renderRecapIfActive() {
 function renderDriverCards() {
   const filterDepot = document.getElementById('filterDepot')?.value || '';
   const list = document.getElementById('driverCards');
-  const key = dateKey(viewDate);
-  const assignments = getAssignments(key);
+  const key = toFbKey(viewDate);
+  const assignments = history[key] || {};
 
   let filtered = employees.filter(e => !filterDepot || e.depot === filterDepot);
   if (!filtered.length) {
@@ -952,8 +963,8 @@ function buildDriverCard(e, assignments) {
 function openDriverModal(empId) {
   currentDriverId = empId;
   const e = employees.find(e => e.id == empId);
-  const key = dateKey(viewDate);
-  const a = getAssignments(key)[empId] || {};
+  const key = toFbKey(viewDate);
+  const a = (history[key] || {})[empId] || {};
   const color = DEPOT_COLORS[e.depot] || 'dif4';
 
   document.getElementById('modalDriverName').textContent = e.firstName + ' ' + e.lastName;
@@ -970,36 +981,33 @@ function openDriverModal(empId) {
 }
 
 function selectTruck(truckId) {
-  const key = dateKey(viewDate);
-  const fbKey = key.replace(/\//g, '-');
-  if (!history[fbKey]) history[fbKey] = {};
-  if (!history[fbKey][currentDriverId]) history[fbKey][currentDriverId] = {};
-  history[fbKey][currentDriverId].truckId = history[fbKey][currentDriverId].truckId == truckId ? null : truckId;
-  fbSaveAssignment(key, currentDriverId, history[fbKey][currentDriverId]);
+  const key = toFbKey(viewDate);
+  if (!history[key]) history[key] = {};
+  if (!history[key][currentDriverId]) history[key][currentDriverId] = {};
+  history[key][currentDriverId].truckId = history[key][currentDriverId].truckId == truckId ? null : truckId;
+  fbSaveAssignment(dateKey(viewDate), currentDriverId, history[key][currentDriverId]);
   document.querySelectorAll('.truck-chip').forEach((chip, i) => {
-    chip.classList.toggle('selected', trucks[i]?.id == history[fbKey][currentDriverId].truckId);
+    chip.classList.toggle('selected', trucks[i]?.id == history[key][currentDriverId].truckId);
   });
   save(); scheduleSyncToSheet();
 }
 
 function autoSaveAssignment() {
   if (!currentDriverId) return;
-  const key = dateKey(viewDate);
-  const fbKey = key.replace(/\//g, '-');
-  if (!history[fbKey]) history[fbKey] = {};
-  if (!history[fbKey][currentDriverId]) history[fbKey][currentDriverId] = {};
-  history[fbKey][currentDriverId].pay = document.getElementById('modalPay').value;
-  history[fbKey][currentDriverId].comment = document.getElementById('modalComment').value;
-  fbSaveAssignment(key, currentDriverId, history[fbKey][currentDriverId]);
+  const key = toFbKey(viewDate);
+  if (!history[key]) history[key] = {};
+  if (!history[key][currentDriverId]) history[key][currentDriverId] = {};
+  history[key][currentDriverId].pay = document.getElementById('modalPay').value;
+  history[key][currentDriverId].comment = document.getElementById('modalComment').value;
+  fbSaveAssignment(dateKey(viewDate), currentDriverId, history[key][currentDriverId]);
   scheduleSyncToSheet();
 }
 
 function clearAssignment() {
   if (!confirm("Effacer l'assignation de ce DA pour ce jour ?")) return;
-  const key = dateKey(viewDate);
-  const fbKey = key.replace(/\//g, '-');
-  if (history[fbKey]) delete history[fbKey][currentDriverId];
-  fbSaveAssignment(key, currentDriverId, null);
+  const key = toFbKey(viewDate);
+  if (history[key]) delete history[key][currentDriverId];
+  fbSaveAssignment(dateKey(viewDate), currentDriverId, null);
   closeModal('modalDriver');
   renderDriverCards();
   renderDashboard();
@@ -1133,11 +1141,11 @@ function renderRecapCalendar() {
     const cellDate = new Date(year, month, d);
     cellDate.setHours(0,0,0,0);
     const key = cellDate.toLocaleDateString('fr-FR');
-    const fbKey = key.replace(/\//g, '-');
+    const fbKey = toFbKey(cellDate);
     const isFuture = cellDate > today;
     const isToday = cellDate.getTime() === today.getTime();
     const isSelected = key === recapSelectedKey;
-    const hasData = history[fbKey] && Object.keys(history[fbKey]).some(id => history[fbKey][id].truckId || history[fbKey][id].pay);
+    const hasData = history[fbKey] && Object.keys(history[fbKey]).some(id => history[fbKey][id] && (history[fbKey][id].truckId || history[fbKey][id].pay));
 
     let style = 'text-align:center;padding:6px 2px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;position:relative;transition:all 0.15s;';
     if (isFuture) { style += 'color:var(--border);cursor:default;'; }
@@ -1176,7 +1184,10 @@ function renderRecapList() {
   const monthNames = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
   dayEl.textContent = dayNames[selDate.getDay()] + ' ' + selDate.getDate() + ' ' + monthNames[selDate.getMonth()] + ' ' + selDate.getFullYear();
 
-  const fbSelectedKey = recapSelectedKey.replace(/\//g, '-');
+  const parts2 = recapSelectedKey.split('/');
+  const selDateObj = new Date(parseInt(parts2[2]), parseInt(parts2[1])-1, parseInt(parts2[0]));
+  selDateObj.setHours(0,0,0,0);
+  const fbSelectedKey = toFbKey(selDateObj);
   const assignments = history[fbSelectedKey] || {};
   let list = employees.filter(e => {
     const a = assignments[e.id];
