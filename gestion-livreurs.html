@@ -4,7 +4,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>GestiLiv</title>
+<title>FYBA</title>
 <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
@@ -155,6 +155,22 @@
   .empty-state p { font-size: 14px; font-weight: 600; }
   .divider { height: 1px; background: var(--border); margin: 14px 0; }
 
+  /* DASHBOARD */
+  .dash-section { background: var(--surface); border-radius: var(--radius); border: 1px solid var(--border); margin-bottom: 12px; overflow: hidden; box-shadow: var(--shadow); }
+  .dash-section-title { font-weight: 800; font-size: 13px; padding: 10px 14px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+  .dash-depot-row { display: flex; align-items: center; justify-content: space-between; padding: 9px 14px; border-bottom: 1px solid var(--bg); }
+  .dash-depot-row:last-child { border-bottom: none; }
+  .dash-depot-left { display: flex; align-items: center; gap: 8px; }
+  .dash-depot-count { font-weight: 800; font-size: 18px; }
+  .dash-depot-lbl { font-size: 12px; color: var(--muted); font-weight: 600; }
+  .dash-da-list { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .cumul-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; border-top: 1px solid var(--border); }
+  .cumul-cell { padding: 10px 8px; text-align: center; border-right: 1px solid var(--border); }
+  .cumul-cell:last-child { border-right: none; }
+  .cumul-num { font-weight: 800; font-size: 18px; color: var(--accent); }
+  .cumul-lbl { font-size: 10px; color: var(--muted); font-weight: 600; margin-top: 1px; }
+  .cumul-depot-header { padding: 8px 14px; font-weight: 800; font-size: 12px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 6px; }
+
   /* CONNECT BANNER */
   .connect-banner { background: #eef6ff; border: 1.5px solid #b8d4f7; border-radius: var(--radius); padding: 14px; margin-bottom: 14px; text-align: center; }
   .connect-banner p { font-size: 13px; color: var(--muted); margin-bottom: 10px; line-height: 1.5; font-weight: 600; }
@@ -183,7 +199,7 @@
 
 <div class="header">
   <div class="header-top">
-    <div class="logo">Gesti<span>Liv</span></div>
+    <div class="logo">FY<span>BA</span></div>
     <div style="display:flex;align-items:center;gap:8px">
       <div class="sync-btn" id="syncBtn" onclick="handleGoogleAuth()">
         <span id="syncIcon">☁</span>
@@ -216,12 +232,11 @@
     <button class="date-nav-btn" id="btnNextDay" onclick="changeDay(1)">›</button>
   </div>
 
-  <!-- Stats dépôts -->
-  <div class="date-stats">
-    <div class="stat-pill" style="border-color:#b8cef7"><div class="num" style="color:#3a6fd8" id="statDIF4">0</div><div class="lbl" style="color:#3a6fd8">DIF4</div></div>
-    <div class="stat-pill" style="border-color:#d4b8f0"><div class="num" style="color:#7a4bbf" id="statDAR2">0</div><div class="lbl" style="color:#7a4bbf">DAR2</div></div>
-    <div class="stat-pill" style="border-color:#a8ddd0"><div class="num" style="color:#2a8a68" id="statOWV1">0</div><div class="lbl" style="color:#2a8a68">OWV1</div></div>
-  </div>
+  <!-- Dashboard résumé du jour -->
+  <div id="dashboardDay"></div>
+
+  <!-- Cumuls semaine / mois -->
+  <div id="dashboardCumul"></div>
 
   <!-- Filtre dépôt -->
   <div class="filter-bar">
@@ -394,9 +409,11 @@ function initFirebase() {
   fbRef('history').on('value', snap => {
     history = snap.val() || {};
     renderDriverCards();
-    updateDateStats();
+    renderDashboard();
     renderRecapIfActive();
   });
+  // Show dashboard immediately even before Firebase responds
+  renderDashboard();
 }
 
 async function fbSaveEmployees() {
@@ -525,12 +542,108 @@ function updateDateNav() {
 }
 
 function updateDateStats() {
-  const key = dateKey(viewDate);
-  const assignments = getAssignments(key);
-  ["DIF4","DAR2","OWV1"].forEach(depot => {
-    const count = employees.filter(e => e.depot === depot && assignments[e.id] && (assignments[e.id].truckId || assignments[e.id].pay)).length;
-    document.getElementById("stat" + depot).textContent = count;
+  renderDashboard();
+}
+
+// ===== DASHBOARD =====
+function countRoutesForKey(fbKey) {
+  const day = history[fbKey] || {};
+  return Object.keys(day).filter(id => day[id] && (day[id].truckId || day[id].pay)).length;
+}
+
+function countDepotRoutesForKey(fbKey, depot) {
+  const day = history[fbKey] || {};
+  return employees.filter(e => e.depot === depot && day[e.id] && (day[e.id].truckId || day[e.id].pay)).length;
+}
+
+function getWeekKeys() {
+  const keys = [];
+  const d = new Date(viewDate);
+  const day = (d.getDay() + 6) % 7; // Monday=0
+  d.setDate(d.getDate() - day);
+  for (let i = 0; i < 7; i++) {
+    const dd = new Date(d);
+    dd.setDate(d.getDate() + i);
+    dd.setHours(0,0,0,0);
+    const today = new Date(); today.setHours(0,0,0,0);
+    if (dd <= today) keys.push(dd.toLocaleDateString('fr-FR').replace(/\//g, '-'));
+  }
+  return keys;
+}
+
+function getMonthKeys() {
+  const keys = [];
+  const year = viewDate.getFullYear();
+  const month = viewDate.getMonth();
+  const today = new Date(); today.setHours(0,0,0,0);
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  for (let d = 1; d <= lastDay; d++) {
+    const dd = new Date(year, month, d);
+    dd.setHours(0,0,0,0);
+    if (dd <= today) {
+      keys.push(dd.toLocaleDateString('fr-FR').replace(/\//g, '-'));
+    }
+  }
+  return keys;
+}
+
+function renderDashboard() {
+  const key = dateKey(viewDate).replace(/\//g, '-');
+  const dayAssignments = history[key] || {};
+  const DEPOT_STYLES = {
+    DIF4: { color:'#3a6fd8', bg:'#e8effd', border:'#b8cef7', cls:'dif4' },
+    DAR2: { color:'#7a4bbf', bg:'#f0eaf9', border:'#d4b8f0', cls:'dar2' },
+    OWV1: { color:'#2a8a68', bg:'#e6f7f2', border:'#a8ddd0', cls:'owv1' }
+  };
+
+  // === DAY DASHBOARD ===
+  let dayHtml = '<div class="dash-section">';
+  dayHtml += '<div class="dash-section-title"><span>📋 Tournées du jour</span></div>';
+
+  DEPOTS.forEach(depot => {
+    const st = DEPOT_STYLES[depot];
+    const assigned = employees.filter(e => e.depot === depot && dayAssignments[e.id] && (dayAssignments[e.id].truckId || dayAssignments[e.id].pay)).length;
+    const total = employees.filter(e => e.depot === depot).length;
+
+    dayHtml += `<div class="dash-depot-row">
+      <div class="dash-depot-left">
+        <span class="depot-badge depot-${st.cls}" style="font-size:11px">${depot}</span>
+        <div class="dash-depot-count" style="color:${st.color}">${assigned}<span style="font-size:12px;font-weight:600;color:var(--muted)">/${total}</span></div>
+      </div>
+    </div>`;
   });
+  dayHtml += '</div>';
+  const dayEl = document.getElementById('dashboardDay');
+  if (dayEl) dayEl.innerHTML = dayHtml;
+
+  // === CUMUL DASHBOARD ===
+  const weekKeys = getWeekKeys();
+  const monthKeys = getMonthKeys();
+
+  let cumulHtml = '<div class="dash-section">';
+  cumulHtml += '<div class="dash-section-title"><span>📈 Cumul des routes</span></div>';
+
+  // Header row
+  cumulHtml += `<div class="cumul-grid" style="border-bottom:1px solid var(--border)">
+    <div class="cumul-cell" style="font-size:10px;font-weight:800;color:var(--muted)">Dépôt</div>
+    <div class="cumul-cell" style="font-size:10px;font-weight:800;color:var(--muted)">Semaine</div>
+    <div class="cumul-cell" style="font-size:10px;font-weight:800;color:var(--muted)">Mois</div>
+  </div>`;
+
+  DEPOTS.forEach(depot => {
+    const st = DEPOT_STYLES[depot];
+    const weekCount = weekKeys.reduce((s, k) => s + countDepotRoutesForKey(k, depot), 0);
+    const monthCount = monthKeys.reduce((s, k) => s + countDepotRoutesForKey(k, depot), 0);
+
+    cumulHtml += `<div class="cumul-grid">
+      <div class="cumul-cell"><span class="depot-badge depot-${st.cls}" style="font-size:10px">${depot}</span></div>
+      <div class="cumul-cell"><div class="cumul-num" style="color:${st.color}">${weekCount}</div></div>
+      <div class="cumul-cell"><div class="cumul-num" style="color:${st.color}">${monthCount}</div></div>
+    </div>`;
+  });
+  cumulHtml += '</div>';
+  const cumulEl = document.getElementById('dashboardCumul');
+  if (cumulEl) cumulEl.innerHTML = cumulHtml;
 }
 
 // ===== SHEETS =====
@@ -636,6 +749,7 @@ function renderAll() {
   renderDriverCards();
   renderEmployeeList();
   renderTruckList();
+  renderDashboard();
 }
 
 function renderRecapIfActive() {
@@ -844,6 +958,7 @@ recapDate.setHours(0,0,0,0);
 let recapSelectedKey = null;
 
 function renderRecap() {
+  if (!recapDate) { recapDate = new Date(); recapDate.setHours(0,0,0,0); }
   renderRecapCalendar();
   renderRecapList();
 }
